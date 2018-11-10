@@ -4,10 +4,11 @@ import Prelude
 import Effect (Effect)
 import Effect.Console (log)
 import Data.Foldable (class Foldable, and, length, intercalate)
-import Data.Array (zipWith, zip, filter)
-import Data.Maybe (Maybe(..))
+import Data.Array (zipWith, zip, filter, insertAt, updateAt, deleteAt)
+import Data.Maybe (Maybe(..), fromJust)
 import Data.Enum (enumFromTo)
 import Data.Tuple (fst, snd)
+import Partial.Unsafe(unsafePartial)
 
 main :: Effect Unit
 main = do
@@ -161,46 +162,81 @@ testDB4 = DB {
 }
 
 --------------------------------------------------------------------------------
---Monologue time
+--New Idea
 
 {-
-So here's the idea:
+This is a datagrid.
+Minimum rows: 0
+Minimum columns: 1
+All data is strings
+There are no column titles
+Rows and columns are both 0 indexed
 
-We are dead set on using react for our UI.
-This, then, means that we're dead set on using Javascript as our language.
-Which then means that we're going to have to use JSON to represent our database information.
-
-Since we intend to update our database using UI interaction, we will require functions
-for transforming our JSON representation of a database in the same way that SQL might transform
-a real database.
-
-Having this will give us a very simple way of reasoning about what is happening as well as making
-it very easy to translate the transformation that is happening at the JSON level to a transformation
-at the SQL level. This should allow us to keep the UI representation of the database aligned with the
-actual database.
-
-It's also important, however, that we do not lean on the JSON level too much. We want to strictly
-enforce a constant flow between the database and the UI so as to captialize as much as we can on the
-robustness of the database implementation. As well as to ensure that the UI is accurately representing
-the database.
-
-Two things to keep in mind with regard to "constant flow". 1. There can be computational and memory bandwidth
-over-head. 2. There can be network overhead which might even be quite expensive. The extent to which this
-might become a problem is very dependent on how I end up implementing things and also dependent on certain
-implementations/technologies and things that I don't understand very well.
-
-This issue is complicated more by the fact that we intend multiple people to be editing the database simultaneously.
-Does this mean that the entire table state needs to be sent to each client on every update? It seems the most sensible
-thing to do honestly but also seems very costly, especially since it has to be converted to JSON every time and then
-sent across a network. The alternative would be calculating the changes but then you risk changes not getting picked
-up and UI falling out of sync and stuff like that.
-
-I think that our main selling points are:
-Providing an effecive database structure to meet the specific needs of auction companies.
-Providing online and collaborative services to conveniently create and modify tables in said database.
-Providing information security by means of automated database backups.
-Providing useful external tools to deliver the data from said database in useful ways (e.g. receipts)
-
-What is even the benefit of using a database in this circumstance???
-I feel like at the moment, the only obvious advantage is that
+All of the above properties of this table are enforced by the api below:
+References to non-existant rows or columns fail to modify the table.
+There is no way to delete rows or columns below the minimum for each.
+All rows and columns which are added respect the current dimension of the table.
 -}
+
+--------------------------------------------------------------------------------
+--Data Structures
+
+newtype DataGrid = DataGrid {numColumns :: Int, numRows :: Int, data :: Array DataGridRow}
+
+instance showDataGrid :: Show DataGrid where
+  show (DataGrid dg) = "\nnumColumns : " <> show dg.numColumns <> ", numRows : " <> show dg.numRows <> "\n" <> prettyFunctor dg.data
+
+type DataGridColumn = Array DataGridCell
+type DataGridRow = Array DataGridCell
+type DataGridCell = String
+
+--------------------------------------------------------------------------------
+--Helper functions
+
+minRows :: Int
+minRows = 0
+
+minCols :: Int
+minCols = 1
+
+inRange :: Int -> Int -> Boolean
+inRange index size = index >= 0 && index < size
+
+newDataGrid :: DataGrid --minimum number of columns is 1
+newDataGrid = DataGrid {numColumns : 1, numRows : 0, data : []}
+
+--------------------------------------------------------------------------------
+--Insert and Delete columns at arbitrary indexes
+
+insertColumn :: Int -> DataGrid -> DataGrid
+insertColumn n dg@(DataGrid {numColumns : c, numRows : r, data : d}) =
+  case (inRange n c) of
+    true -> DataGrid {numColumns : (c+1), numRows : r, data : unsafePartial $ map (fromJust <<< insertAt n "") d}
+    false -> dg
+
+deleteColumn :: Int -> DataGrid -> DataGrid
+deleteColumn n dg@(DataGrid {numColumns : c, numRows : r, data : d}) =
+  case (c > minCols && inRange n c) of
+    true -> DataGrid {numColumns : (c-1), numRows : r, data : unsafePartial $ map (fromJust <<< deleteAt n) d}
+    false -> dg
+
+--------------------------------------------------------------------------------
+--Insert, Update and Delete rows at arbitrary indexes
+
+insert :: Int -> DataGridRow -> DataGrid -> DataGrid
+insert n dr dg@(DataGrid {numColumns : c, numRows : r, data : d}) =
+  case (length dr == c && inRange n r) of
+    true -> DataGrid {numColumns : c, numRows : (r+1), data : unsafePartial $ fromJust $ insertAt n dr d}
+    false -> dg
+
+update :: Int -> DataGridRow -> DataGrid -> DataGrid
+update n dr dg@(DataGrid {numColumns : c, numRows : r, data : d}) =
+  case (length dr == c && inRange n r) of
+    true -> DataGrid {numColumns : c, numRows : r, data : unsafePartial $ fromJust $ updateAt n dr d}
+    false -> dg
+
+delete :: Int -> DataGrid -> DataGrid
+delete n dg@(DataGrid {numColumns : c, numRows : r, data : d}) =
+  case (r > minRows && inRange n r) of
+    true -> DataGrid {numColumns : c, numRows : (r-1), data : unsafePartial $ fromJust $ deleteAt n d}
+    false -> dg
